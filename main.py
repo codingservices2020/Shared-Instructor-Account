@@ -251,6 +251,7 @@ def main():
     application.add_handler(CommandHandler("generate_link", link_command))
     application.add_handler(CommandHandler("generate_code", generate_code))
     application.add_handler(CommandHandler("show_users", show_users))
+    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code_input))
 
     scheduler = BackgroundScheduler(timezone="UTC")
