@@ -121,15 +121,16 @@ async def code_duration_handler(update: Update, context: ContextTypes.DEFAULT_TY
         duration = timedelta(days=30)
     else:
         duration = timedelta(days=1)
-    # Generate a random 6-digit code
-    code = str(random.randint(100000, 999999))
+    # Generate a random 8-digit code
+    code = str(random.randint(10000000, 99999999))
     expiry = datetime.now() + duration
     expiry_str = expiry.strftime("%Y-%m-%d %H:%M:%S")
     codes = load_codes()
     codes.append({"code": code, "expiry": expiry_str})
     save_codes(codes)
     await query.edit_message_text(
-        f"Generated Subscription Code: `{code}`\nValid until: {expiry_str}",
+        f"Generated Subscription Code: `{code}`",
+        # f"\nValid until: {expiry_str}",
         parse_mode="Markdown"
     )
 
@@ -153,7 +154,7 @@ async def show_codes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ------------------ User Command: Request Link ------------------ #
 async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please enter the 6-digit subscription code provided by the admin:")
+    await update.message.reply_text("Please enter the 8-digit subscription code provided by the admin:")
     context.user_data["awaiting_code"] = True
 
 # ------------------ Handler: Process Code Input ------------------ #
@@ -285,7 +286,7 @@ async def delete_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ------------------ User Command: Request Link ------------------ #
 async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please enter the 6-digit subscription code provided by the admin:")
+    await update.message.reply_text("Please enter the 8-digit subscription code provided by the admin:")
     context.user_data["awaiting_code"] = True
 
 # ------------------ Start Command ------------------ #
@@ -329,7 +330,7 @@ async def admin_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         """
 Commands available:
-/generate_code - Generate a 6-digit code with a duration option
+/generate_code - Generate a 8-digit code with a duration option
 /show_users - Show list of all premium users
 /show_codes - Show all active subscription codes
 /delete_code - Delete a specific subscription code. 
@@ -344,7 +345,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
 Commands available:
 /start - Start the bot and check your membership
-/generate_link - Generate your invite link using a 6-digit code
+/generate_link - Generate your invite link using a 8-digit code
 /admin_commands - Show all commands that only admin can use
 /help - Show this help message
 """
