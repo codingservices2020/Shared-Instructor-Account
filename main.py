@@ -16,11 +16,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import asyncio
 import logging
 import random
-from keep_alive import keep_alive
-keep_alive()
+# from keep_alive import keep_alive
+# keep_alive()
 
-# from dotenv import load_dotenv
-# load_dotenv()
+from dotenv import load_dotenv
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -75,7 +75,7 @@ def load_codes():
     """
     Load subscription codes from the JSON file.
     Each code should be stored as a dictionary:
-       {"code": "123456", "expiry": "YYYY-MM-DD HH:MM:SS"}
+       {"code": "12345678", "expiry": "YYYY-MM-DD HH:MM:SS"}
     """
     if os.path.exists(CODE_FILE):
         try:
@@ -130,7 +130,6 @@ async def code_duration_handler(update: Update, context: ContextTypes.DEFAULT_TY
     save_codes(codes)
     await query.edit_message_text(
         f"Generated Subscription Code: `{code}`",
-        # f"\nValid until: {expiry_str}",
         parse_mode="Markdown"
     )
 
@@ -161,6 +160,34 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
+    # NEW: Check if the admin is awaiting a code deletion input
+    if context.user_data.get("awaiting_delete_code"):
+        code_to_delete = update.message.text.strip()
+        codes = load_codes()
+        found = False
+        for c in codes:
+            if isinstance(c, dict) and c.get("code") == code_to_delete:
+                codes.remove(c)
+                found = True
+                break
+        if found:
+            save_codes(codes)
+            await update.message.reply_text(f"Code `{code_to_delete}` deleted successfully.", parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"Code `{code_to_delete}` not found.", parse_mode="Markdown")
+        context.user_data.pop("awaiting_delete_code", None)
+        # Ask if the admin wants to delete another code via inline buttons.
+        keyboard = [
+            [
+                InlineKeyboardButton("Yes", callback_data="delete_more_yes"),
+                InlineKeyboardButton("No", callback_data="delete_more_no")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Do you want to delete more code?", reply_markup=reply_markup)
+        return
+
+    # Process subscription code input for link generation
     if context.user_data.get("awaiting_code"):
         code_input = update.message.text.strip()
         codes = load_codes()
@@ -189,6 +216,7 @@ async def handle_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Invalid or expired code. Please try again.")
         return
 
+    # Process the user's full name after code verification
     if context.user_data.get("verified"):
         user_name = update.message.text.strip()
         expiry_dt = context.user_data.get("code_expiry", datetime.now() + timedelta(days=30))
@@ -216,6 +244,18 @@ async def handle_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error creating invite link: {e}")
         context.user_data.pop("verified", None)
         context.user_data.pop("code_expiry", None)
+
+# ------------------ Callback Query Handler for Delete More ------------------ #
+async def delete_more_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data == "delete_more_yes":
+        # Set the flag again to await the next deletion code and prompt the admin.
+        context.user_data["awaiting_delete_code"] = True
+        await query.edit_message_text("Please enter the code you want to delete:")
+    elif data == "delete_more_no":
+        await query.edit_message_text("Exiting deletion process.")
 
 # ------------------ Periodic Task: Check Expired Subscriptions ------------------ #
 async def check_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
@@ -266,8 +306,10 @@ async def delete_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args = context.args
+    # If no argument is provided, set the flag to await code deletion.
     if not args:
-        await update.message.reply_text("Usage: /delete_code<space><code>")
+        context.user_data["awaiting_delete_code"] = True
+        await update.message.reply_text("Please enter the code you want to delete:")
         return
 
     code_to_delete = args[0].strip()
@@ -284,7 +326,8 @@ async def delete_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"Code `{code_to_delete}` not found.", parse_mode="Markdown")
 
-# ------------------ User Command: Request Link ------------------ #
+# ------------------ (Duplicate) User Command: Request Link ------------------ #
+# (If you already have a link_command above, you can remove or comment out this duplicate.)
 async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Please enter the 8-digit subscription code provided by the admin:")
     context.user_data["awaiting_code"] = True
@@ -334,10 +377,9 @@ Commands available:
 /show_users - Show list of all premium users
 /show_codes - Show all active subscription codes
 /delete_code - Delete a specific subscription code. 
-Usage: /delete_code<space><code>
+Usage: /delete_code or /delete_code <code>
 """
     )
-
 
 # ------------------ Help Command ------------------ #
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -372,6 +414,8 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code_input))
     # Register the callback query handler for code generation options
     application.add_handler(CallbackQueryHandler(code_duration_handler, pattern="^gen_code_"))
+    # Register the callback query handler for delete-more inline buttons
+    application.add_handler(CallbackQueryHandler(delete_more_handler, pattern="^delete_more_"))
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(lambda: asyncio.run(check_expired_subscriptions(application)), "interval", hours=1)
     scheduler.start()
