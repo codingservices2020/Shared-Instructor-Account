@@ -263,8 +263,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"*🔰You are already a premium member!🔰*" if is_premium else
             f"*🔰You are not a premium member!🔰*"
             f"\n\nTo use this bot, you must first purchase a subscription. Please click on the button below to make the payment."
-            f"\n\n Your Chat-ID: `{user_id}`\n"
-            f"(Use this Chat-ID on Razorpay Payment Gateway)",
+            f"\n\n Your User ID: `{user_id}`\n"
+            f"(Use this User ID on Razorpay Payment Gateway)",
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )
