@@ -16,11 +16,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import asyncio
 import logging
 import requests
-# from keep_alive import keep_alive
-# keep_alive()
+from keep_alive import keep_alive
+keep_alive()
 
-from dotenv import load_dotenv
-load_dotenv()
+# from dotenv import load_dotenv
+# load_dotenv()
 
 # Configure logging
 logging.basicConfig(
