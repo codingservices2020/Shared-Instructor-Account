@@ -15,12 +15,12 @@ import json
 from apscheduler.schedulers.background import BackgroundScheduler
 import asyncio
 import logging
-import random
-from keep_alive import keep_alive
-keep_alive()
+import requests
+# from keep_alive import keep_alive
+# keep_alive()
 
-# from dotenv import load_dotenv
-# load_dotenv()
+from dotenv import load_dotenv
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -34,13 +34,19 @@ TOKEN = os.getenv('TOKEN')
 PRIVATE_CHANNEL_ID = int(os.getenv('PRIVATE_CHANNEL_ID'))
 ACCOUNT_URL = os.getenv('ACCOUNT_URL')
 MSG_DELETE_TIME = int(os.getenv('MSG_DELETE_TIME'))
+PAYMENT_URL = os.getenv('PAYMENT_URL')
 ADMIN_URL = os.getenv('ADMIN_URL')
+CODES_URL = os.getenv('CODES_URL')
+DELETED_CODES_URL = os.getenv('DELETED_CODES_URL')
 ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID'))
 
 subscription_data = {}
 user_data = {}
 SUBSCRIPTION_FILE = "subscription_data.json"
 CODE_FILE = "codes.json"
+
+# Global variable to store the subscription code fetched from the API.
+subscription_code = None
 
 # ------------------ Subscription Data Helpers ------------------ #
 def save_subscription_data():
@@ -70,87 +76,6 @@ def load_subscription_data():
             logger.error(f"Error loading subscription data: {e}. Resetting to an empty dictionary.")
     return {}
 
-# ------------------ Code Helpers ------------------ #
-def load_codes():
-    """
-    Load subscription codes from the JSON file.
-    Each code should be stored as a dictionary:
-       {"code": "12345678", "expiry": "YYYY-MM-DD HH:MM:SS"}
-    """
-    if os.path.exists(CODE_FILE):
-        try:
-            with open(CODE_FILE, "r") as file:
-                codes = json.load(file)
-                return codes if isinstance(codes, list) else []
-        except Exception as e:
-            logger.error(f"Error loading codes: {e}")
-    return []
-
-def save_codes(codes):
-    with open(CODE_FILE, "w") as file:
-        json.dump(codes, file, indent=4)
-
-# ------------------ Admin Command: Generate Code ------------------ #
-async def generate_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id != ADMIN_CHAT_ID:
-        await update.message.reply_text("You are not authorized to use this command.")
-        return
-
-    # Build an inline keyboard with duration options
-    keyboard = [
-        [InlineKeyboardButton("1 Day", callback_data="gen_code_1_day")],
-        [InlineKeyboardButton("1 Week", callback_data="gen_code_1_week")],
-        [InlineKeyboardButton("1 Month", callback_data="gen_code_1_month")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "For which duration do you want to generate the code?", reply_markup=reply_markup
-    )
-
-# ------------------ Callback Query Handler for Code Generation ------------------ #
-async def code_duration_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data  # e.g., "gen_code_1_day", "gen_code_1_week", or "gen_code_1_month"
-    if data == "gen_code_1_day":
-        duration = timedelta(days=1)
-    elif data == "gen_code_1_week":
-        duration = timedelta(weeks=1)
-    elif data == "gen_code_1_month":
-        duration = timedelta(days=30)
-    else:
-        duration = timedelta(days=1)
-    # Generate a random 8-digit code
-    code = str(random.randint(10000000, 99999999))
-    expiry = datetime.now() + duration
-    expiry_str = expiry.strftime("%Y-%m-%d %H:%M:%S")
-    codes = load_codes()
-    codes.append({"code": code, "expiry": expiry_str})
-    save_codes(codes)
-    await query.edit_message_text(
-        f"Generated Subscription Code: `{code}`",
-        parse_mode="Markdown"
-    )
-
-# ------------------ New Command: Show Active Codes ------------------ #
-async def show_codes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    codes = load_codes()
-    now = datetime.now()
-    active_codes = []
-    for c in codes:
-        if isinstance(c, dict):
-            expiry_dt = datetime.strptime(c["expiry"], "%Y-%m-%d %H:%M:%S")
-            if expiry_dt >= now:
-                active_codes.append(c)
-    if active_codes:
-        message = "Active Subscription Codes:\n"
-        for code_entry in active_codes:
-            message += f"`{code_entry['code']}` - Expires: {code_entry['expiry']}\n"
-        await update.message.reply_text(message, parse_mode="Markdown")
-    else:
-        await update.message.reply_text("No active subscription codes found.")
-
 # ------------------ User Command: Request Link ------------------ #
 async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Please enter the 8-digit subscription code provided by the admin:")
@@ -158,52 +83,30 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ------------------ Handler: Process Code Input ------------------ #
 async def handle_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global subscription_code  # Access the global variable
     user_id = update.message.from_user.id
-
-    # NEW: Check if the admin is awaiting a code deletion input
-    if context.user_data.get("awaiting_delete_code"):
-        code_to_delete = update.message.text.strip()
-        codes = load_codes()
-        found = False
-        for c in codes:
-            if isinstance(c, dict) and c.get("code") == code_to_delete:
-                codes.remove(c)
-                found = True
-                break
-        if found:
-            save_codes(codes)
-            await update.message.reply_text(f"Code `{code_to_delete}` deleted successfully.", parse_mode="Markdown")
-        else:
-            await update.message.reply_text(f"Code `{code_to_delete}` not found.", parse_mode="Markdown")
-        context.user_data.pop("awaiting_delete_code", None)
-        # Ask if the admin wants to delete another code via inline buttons.
-        keyboard = [
-            [
-                InlineKeyboardButton("Yes", callback_data="delete_more_yes"),
-                InlineKeyboardButton("No", callback_data="delete_more_no")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("Do you want to delete more code?", reply_markup=reply_markup)
-        return
 
     # Process subscription code input for link generation
     if context.user_data.get("awaiting_code"):
-        code_input = update.message.text.strip()
-        codes = load_codes()
-        matched_code = None
-        expiry_dt = None
-        for c in codes:
-            # Ensure that c is a dictionary before accessing its keys
-            if isinstance(c, dict) and c.get("code") == code_input:
-                expiry_str = c.get("expiry")
-                expiry_dt = datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
-                if expiry_dt >= datetime.now():
-                    matched_code = c
-                    break
-        if matched_code:
-            codes.remove(matched_code)
-            save_codes(codes)
+        if not subscription_code:
+            response = requests.get(url=CODES_URL)
+            try:
+                response.raise_for_status()
+                data = response.json()
+                subscription_code = data['sheet1'][0]['codes']
+            except requests.exceptions.HTTPError as err:
+                print("HTTP Error:", err)
+        try:
+            # Convert the input code to integer if needed.
+            code_input = int(update.message.text.strip())
+        except ValueError:
+            await update.message.reply_text("The code must be numeric. Please try again.")
+            return
+
+        if subscription_code == code_input:
+            expiry_dt = datetime.now() + timedelta(days=30)   # Create an expiry date 30 days from now
+            requests.delete(url=DELETED_CODES_URL)            # delete used code from Google sheet
+            subscription_code = None
             # Store the verified code's expiry so we can use it for the invite link
             context.user_data["verified"] = True
             context.user_data["code_expiry"] = expiry_dt
@@ -212,6 +115,7 @@ async def handle_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "<b>🔰SUBSCRIPTION CODE VERIFIED!🔰</b>\n\nPlease enter your full name:",
                 parse_mode="HTML"
             )
+
         else:
             await update.message.reply_text("Invalid or expired code. Please try again.")
         return
@@ -239,23 +143,20 @@ async def handle_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"<b>🌐 Your plan will expire on {day} at {time_str}.</b>",
                 parse_mode="HTML"
             )
+            # Notify admin that this user has successfully generated the channel invite link.
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=f"<b>🔰SUBSCRIPTION PURCHASED🔰</b>\n\n"
+                     f"Name: <a href='tg://user?id={user_id}'>{subscription_data[user_id]['name']}</a>\n"
+                     f"User ID: {user_id}\n"
+                     f"Expiry: {day} at {time_str}",
+                parse_mode="HTML"
+            )
         except Exception as e:
             await update.message.reply_text("Error generating invite link. Please try again later.")
             logger.error(f"Error creating invite link: {e}")
         context.user_data.pop("verified", None)
         context.user_data.pop("code_expiry", None)
-
-# ------------------ Callback Query Handler for Delete More ------------------ #
-async def delete_more_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    if data == "delete_more_yes":
-        # Set the flag again to await the next deletion code and prompt the admin.
-        context.user_data["awaiting_delete_code"] = True
-        await query.edit_message_text("Please enter the code you want to delete:")
-    elif data == "delete_more_no":
-        await query.edit_message_text("Exiting deletion process.")
 
 # ------------------ Periodic Task: Check Expired Subscriptions ------------------ #
 async def check_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
@@ -271,6 +172,18 @@ async def check_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.ban_chat_member(PRIVATE_CHANNEL_ID, chat_id, until_date=now)
                 await context.bot.unban_chat_member(PRIVATE_CHANNEL_ID, chat_id)
+                await context.bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=f"<b>🔰SUBSCRIPTION EXPIRED🔰</b>\n\n"
+                         f"📌 <a href='tg://user?id={chat_id}'>{subscription_data[chat_id]['name']}</a> "
+                         f"removed from Shared Instructor Bot channel.",
+                    parse_mode="HTML"
+                )
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="<b>🔰SUBSCRIPTION EXPIRED🔰</b>\n\nPlz, type /start command to make the payment",
+                    parse_mode="HTML"
+                )
                 logger.info(f"Removed expired user {chat_id} from the private channel.")
             except Exception as e:
                 logger.error(f"Failed to remove/unban user {chat_id}: {e}")
@@ -298,59 +211,62 @@ async def show_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disable_web_page_preview=True
     )
 
-# ------------------ New Admin Command: Delete Code ------------------ #
-async def delete_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ------------------ Total Codes Command ------------------ #
+async def total_codes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id != ADMIN_CHAT_ID:
         await update.message.reply_text("You are not authorized to use this command.")
         return
-
-    args = context.args
-    # If no argument is provided, set the flag to await code deletion.
-    if not args:
-        context.user_data["awaiting_delete_code"] = True
-        await update.message.reply_text("Please enter the code you want to delete:")
-        return
-
-    code_to_delete = args[0].strip()
-    codes = load_codes()
-    found = False
-    for c in codes:
-        if isinstance(c, dict) and c.get("code") == code_to_delete:
-            codes.remove(c)
-            found = True
-            break
-    if found:
-        save_codes(codes)
-        await update.message.reply_text(f"Code `{code_to_delete}` deleted successfully.", parse_mode="Markdown")
-    else:
-        await update.message.reply_text(f"Code `{code_to_delete}` not found.", parse_mode="Markdown")
-
-# ------------------ (Duplicate) User Command: Request Link ------------------ #
-# (If you already have a link_command above, you can remove or comment out this duplicate.)
-async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please enter the 8-digit subscription code provided by the admin:")
-    context.user_data["awaiting_code"] = True
+    sent_message = await update.message.reply_text("Counting...")
+    try:
+        response = requests.get(url=CODES_URL)
+        context.job_queue.run_once(delete_message, 0, data=(sent_message.chat.id, sent_message.message_id))
+        try:
+            response.raise_for_status()
+            data = response.json()
+            # Count the total number of subscription codes remaining.
+            count = len(data['sheet1'])
+            await update.message.reply_text(f"Total number of remaining subscription codes: {count}")
+            print(f"Total number of remaining subscription codes: {count}")
+        except requests.exceptions.HTTPError as err:
+            print("HTTP Error:", err)
+    except BadRequest as e:
+        logger.error(f"BadRequest Error: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error: {type(e).__name__} - {e}")
 
 # ------------------ Start Command ------------------ #
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global subscription_code  # Declare as global so we can assign to it
     try:
+        response = requests.get(url=CODES_URL)
+        try:
+            response.raise_for_status()
+            data = response.json()
+            # Assign the fetched code to our global variable
+            subscription_code = data['sheet1'][0]['codes']
+            # print("Subscription code from API:", subscription_code)
+        except requests.exceptions.HTTPError as err:
+            print("HTTP Error:", err)
         user_id = update.message.from_user.id
         chat_member = await context.bot.get_chat_member(PRIVATE_CHANNEL_ID, user_id)
         is_premium = chat_member.status in ["member", "administrator", "creator"]
-        button_text = "Access Turnitin Account" if is_premium else "🚀Contact Admin🚀"
+        button_text = "Access Turnitin Account" if is_premium else "🚀Make Payment🚀"
         button = InlineKeyboardButton(
             button_text,
             web_app=WebAppInfo(url=ACCOUNT_URL) if is_premium else None,
-            url=ADMIN_URL if not is_premium else None,
+            url=PAYMENT_URL if not is_premium else None,
         )
         keyboard = [[button]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         sent_message = await update.message.reply_text(
-            "<b>🔰You are already a premium member!🔰</b>" if is_premium else
-            "<b>🔰You are not a premium member!🔰</b>\n\nTo use this bot, you must first purchase a subscription. Please click on the button below to contact Admin and make the payment.",
+            f"*🔰You are already a premium member!🔰*" if is_premium else
+            f"*🔰You are not a premium member!🔰*"
+            f"\n\nTo use this bot, you must first purchase a subscription. Please click on the button below to make the payment."
+            f"\n\n Your Chat-ID: `{user_id}`\n"
+            f"(Use this Chat-ID on Razorpay Payment Gateway)",
             reply_markup=reply_markup,
-            parse_mode="HTML"
+            parse_mode="Markdown"
         )
         context.job_queue.run_once(delete_message, MSG_DELETE_TIME,
                                    data=(sent_message.chat.id, sent_message.message_id))
@@ -373,13 +289,11 @@ async def admin_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         """
 Commands available:
-/generate_code - Generate a 8-digit code with a duration option
 /show_users - Show list of all premium users
-/show_codes - Show all active subscription codes
-/delete_code - Delete a specific subscription code. 
-Usage: /delete_code or /delete_code <code>
+/total_codes - Count total number of remaining subscription codes
 """
     )
+
 
 # ------------------ Help Command ------------------ #
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -405,19 +319,14 @@ def main():
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("generate_link", link_command))
-    application.add_handler(CommandHandler("generate_code", generate_code))
     application.add_handler(CommandHandler("show_users", show_users))
-    application.add_handler(CommandHandler("show_codes", show_codes))
-    application.add_handler(CommandHandler("delete_code", delete_code))
+    application.add_handler(CommandHandler("total_codes", total_codes))
     application.add_handler(CommandHandler("admin_commands", admin_commands))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code_input))
-    # Register the callback query handler for code generation options
-    application.add_handler(CallbackQueryHandler(code_duration_handler, pattern="^gen_code_"))
-    # Register the callback query handler for delete-more inline buttons
-    application.add_handler(CallbackQueryHandler(delete_more_handler, pattern="^delete_more_"))
     scheduler = BackgroundScheduler(timezone="UTC")
-    scheduler.add_job(lambda: asyncio.run(check_expired_subscriptions(application)), "interval", hours=1)
+    # scheduler.add_job(lambda: asyncio.run(check_expired_subscriptions(application)), "interval", hours=1)
+    scheduler.add_job(lambda: asyncio.run(check_expired_subscriptions(application)), "interval", minutes=1)
     scheduler.start()
     application.run_polling()
 
