@@ -8,7 +8,6 @@ from telegram.ext import (
     filters, ConversationHandler, MessageHandler,
 )
 from telegram.error import BadRequest
-import os
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import asyncio
@@ -17,6 +16,9 @@ import requests
 import json
 import random
 import string
+import time
+import os
+
 from keep_alive import keep_alive
 keep_alive()
 
@@ -71,7 +73,10 @@ def load_subscription_data():
     if os.path.exists(SUBSCRIPTION_FILE):
         try:
             with open(SUBSCRIPTION_FILE, "r") as file:
-                data = json.load(file)
+                content = file.read().strip()
+                if not content:  # Handle empty file
+                    return {}
+                data = json.loads(content)
                 return {
                     chat_id: {
                         "name": details.get("name", "Unknown"),
@@ -82,6 +87,7 @@ def load_subscription_data():
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             logger.error(f"Error loading subscription data: {e}. Resetting to an empty dictionary.")
     return {}
+
 
 
 def load_codes():
@@ -105,6 +111,7 @@ def generate_code(validity_days=1):
     # Generate a random alphanumeric code
     code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
     # Set expiry date
+    # expiry_dt = datetime.now() + timedelta(days=validity_days)
     expiry_dt = datetime.now() + timedelta(days=validity_days)
     # Store the code with its expiry date
     codes_data[code] = expiry_dt.strftime("%Y-%m-%d %H:%M")
@@ -155,6 +162,8 @@ async def generate_code_command(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ Start the upload process """
+    # Explicitly reset the conversation state
+    context.user_data.clear()
     await update.message.reply_text("Please enter you subscription code:")
     return WAITING_FOR_CODE
 
@@ -164,12 +173,18 @@ async def process_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = update.message.text
     global codes_data
     codes_data = load_codes()
-    print(codes_data)
-    print(f'code:{code}, data type: {type(code)}')
-    print(code in codes_data)
+    # print(codes_data)
+    # print(f'code:{code}, data type: {type(code)}')
+    # print(code in codes_data)
     if code in codes_data:
         print("Success")
         expiry_dt = datetime.strptime(codes_data[code], "%Y-%m-%d %H:%M")
+        # Ensure expiry_dt is in the future
+        expiry_timestamp = int(expiry_dt.timestamp())
+        if expiry_timestamp <= int(time.time()):
+            logger.error("Generated expiry date is invalid (in the past).")
+            await update.message.reply_text("Error: The generated expiry date is invalid.")
+            return
         day = expiry_dt.strftime("%Y-%m-%d")
         time_str = expiry_dt.strftime("%H:%M")
         subscription_data[user_id] = {
@@ -185,30 +200,31 @@ async def process_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
             invite_link = await context.bot.create_chat_invite_link(
                 PRIVATE_CHANNEL_ID,
                 member_limit=1,
-                expire_date=int(expiry_dt.timestamp())
-            )
-            await update.message.reply_text(
-                f"<b>🔰CODE REDEEM SUCCESSFULLY🔰</b>\n\n"
-                f"🚀 Here is your premium member invite link:\n{invite_link.invite_link}\n"
-                f"<b>(Valid for one-time use)</b>\n\n"
-                f"✅ After joining this channel, type /start to access the instructor account.\n\n"
-                f"<b>🌐 Your plan will expire on {day} at {time_str}.</b>",
-                parse_mode="HTML"
-            )
-            # Notify admin that this user has successfully generated the channel invite link.
-            await context.bot.send_message(
-                chat_id=ADMIN_CHAT_ID,
-                text=f"<b>🔰SUBSCRIPTION ACTIVATED🔰</b>\n\n"
-                     f"✅ Subscription code redeem successfully\n\n"
-                     f"<b>User ID:</b> {user_id}\n"
-                     f"<b>Expiry:</b> {day} at {time_str}",
-                parse_mode="HTML"
+                expire_date=expiry_timestamp
             )
         except Exception as e:
             await update.message.reply_text("Error generating invite link. Please try again later.")
             logger.error(f"Error creating invite link: {e}")
+
+        await update.message.reply_text(
+            f"<b>🔰CODE REDEEM SUCCESSFULLY🔰</b>\n\n"
+            f"🚀 Here is your premium member invite link:\n{invite_link.invite_link}\n"
+            f"<b>(Valid for one-time use)</b>\n\n"
+            f"✅ After joining this channel, type /start to access the instructor account.\n\n"
+            f"<b>🌐 Your plan will expire on {day} at {time_str}.</b>",
+            parse_mode="HTML"
+        )
+        # Notify admin that this user has successfully generated the channel invite link.
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"<b>🔰SUBSCRIPTION ACTIVATED🔰</b>\n\n"
+                 f"✅ Subscription code redeem successfully\n\n"
+                 f"<b>User ID:</b> {user_id}\n"
+                 f"<b>Expiry:</b> {day} at {time_str}",
+            parse_mode="HTML"
+        )
     else:
-        await update.message.reply_text("❌ Invalid or expired code.")
+        await update.message.reply_text("❌ Invalid or expired code. Try again.")
 
     return ConversationHandler.END
 
@@ -219,6 +235,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()  # Acknowledge the button press
     if query.data.startswith("generate_"):
         days = int(query.data.split("_")[1])
+        print(f"days: {days}")
         code = generate_code(days)
         await query.message.reply_text(f"Generated Code: `{code}` \n(Valid for {days} days)", parse_mode="Markdown")
 
@@ -453,7 +470,9 @@ def main():
         states={
             WAITING_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_code)],
         },
-        fallbacks=[],
+        fallbacks=[
+            CommandHandler("redeem_code", redeem_code),
+        ],
     )
 
     application.add_handler(CommandHandler("start", start))
