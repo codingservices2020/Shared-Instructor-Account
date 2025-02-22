@@ -2,8 +2,8 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
 
-DB_FILE_NAME = "testing_database"  # Define the firebase database file
-# DB_FILE_NAME = "Instructor_subscriptions"  # Define the firebase database file
+# DB_FILE_NAME = "testing_database"  # Define the firebase database file
+DB_FILE_NAME = "Instructor_subscriptions"  # Define the firebase database file
 
 # Load Firebase credentials
 cred = credentials.Certificate("firebase-adminsdk.json")  # Use your downloaded key
