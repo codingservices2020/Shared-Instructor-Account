@@ -1,0 +1,7 @@
+aiogram==2.23.1
+flask
+requests
+apscheduler
+python-dotenv
+python-telegram-bot[job-queue]
+firebase-admin
