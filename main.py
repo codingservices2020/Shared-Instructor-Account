@@ -90,7 +90,7 @@ def generate_code(validity_days=1):
     code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
     # Set expiry date
     # expiry_dt = datetime.now() + timedelta(days=validity_days)
-    expiry_dt = datetime.now() + timedelta(minutes=validity_days)
+    expiry_dt = datetime.now() + timedelta(days=validity_days)
     # Store the code with its expiry date
     codes_data[code] = expiry_dt.strftime("%Y-%m-%d %H:%M")
     # Save the updated codes back to the file
