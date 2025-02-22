@@ -471,8 +471,8 @@ def main():
     application.add_handler(conv_handler_upload)
 
     scheduler = BackgroundScheduler(timezone="UTC")
-    # scheduler.add_job(lambda: asyncio.run(check_expired_subscriptions(application)), "interval", hours=1)
-    scheduler.add_job(lambda: asyncio.run(check_expired_subscriptions(application)), "interval", minutes=1)
+    scheduler.add_job(lambda: asyncio.run(check_expired_subscriptions(application)), "interval", hours=1)
+    # scheduler.add_job(lambda: asyncio.run(check_expired_subscriptions(application)), "interval", minutes=1)
     scheduler.start()
     application.run_polling()
 
